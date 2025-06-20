@@ -1,6 +1,6 @@
-c## Введение
+## Введение
 
-Настоящий документ является структурированным отчетом с подробным описанием выполняемых действий в процессе решения ДЗ по лекции "Устройство и загрузка современного сервера". Выполнена Часть 1. 
+Настоящий документ является структурированным отчетом с подробным описанием выполняемых действий в процессе решения ДЗ по лекции "Устройство и загрузка современного сервера". Выполнены Часть 1 и Часть 2. 
 
 ДЗ выполнено на ОС Ubuntu 24.04.2 LTS:
 
@@ -226,6 +226,8 @@ y - подтверждаю изменения
 
 ![img](attachments/1.27.png)
 
+Выхожу из chroot.
+
 Размонтирую ФС:
 
 ![img](attachments/1.28.png)
@@ -262,8 +264,6 @@ y - подтверждаю изменения
 ![img](attachments/1.34.png)
 
 ### Часть 2. Найти и получить секрет
-
-#### Мои попытки найти секрет:
 
 Выключаю ВМ.
 
@@ -325,9 +325,9 @@ su -
 
 ls /dev/tpm*
 
-Ищу по шаблону *secret*:
+Ищу потенциально нужные файлы по шаблону:
 
-find / -name *secret*
+`find / -name *secret*`
 
 Проверяю найденные и подходящие, на мой взгляд, файлы:
 
@@ -470,7 +470,7 @@ sha256:
 
 ![img](attachments/2.5.png)
 
-tpm2_eventlog /sys/kernel/security/tpm0/binary_bios_measurements
+Поиск по логам посредством `tpm2_eventlog /sys/kernel/security/tpm0/binary_bios_measurements` не дал результатов.
 
 Проверяю историю комманд (/home/kit/.bash_history) пользователя kit и обнаруживаю комманду:
 
@@ -478,14 +478,22 @@ tpm2_eventlog /sys/kernel/security/tpm0/binary_bios_measurements
 sudo grub-reboot 'gnulinux-advanced-b5151f8a-f766-46bd-8d91-14bad0f282e8>gnulinux-6.8.0-59-generic-advanced-b5151f8a-f766-46bd-8d91-14bad0f282e8'
 ```
 
-Ввожу ее.
+Ввожу ее, эта команда указывает использовать конкретную запись в меню GRUB для загрузки ядра 6.8.0-59-generic, которое использовалось в момент шифрования. Это должно вернуть регистр PCR 8 в состояние на момент шифрования.
 
 В файле /etc/fstab раскомментирую раздел:
 
 `/dev/disk/by-id/dm-uuid-LVM-0K4H94tgH9BHZRa3jwnOhvyerKbswXkUqo2oHdGJ9KUwRRiTgqaIGnuKdjPiKIy7 /secret ext4 defaults 0 1`
 
+В файле /etc/crypttab раскомментирую строку:
+
+`dm_crypt-1 UUID=846b5496-b627-4602-8c4c-25cdf32dd9f6 none tpm2-device=auto`
+
  Перезагружаю ВМ.
 
-Далее раздел должен расшифроваться, но у меня система переходит в emergency mode и раздел не расшифровывается.
+ Проверяю содержимое директории /secret:
 
 ![img](attachments/2.6.png)
+
+Содержимое файла /secret/flag.txt:
+
+`Congratulations! You've won a score point! Code: 7pMc@nun10ck5ecRe7s`
