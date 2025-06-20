@@ -38,7 +38,8 @@ qemu-system-x86_64 -smp cores=4,threads=1 \
         -nic user,hostfwd=tcp:127.0.0.1:2222-:22 \
 	-vnc :1,password-secret=vncpw -object secret,id=vncpw,file=vncpassword,format=raw \
 	-boot menu=on \
-	-cdrom systemrescue-12.01-amd64.iso
+	-cdrom systemrescue-12.01-amd64.iso \
+	-enable-kvm
 ```
 
 - **`qemu-system-x86_64`**  
@@ -99,6 +100,8 @@ qemu-system-x86_64 -smp cores=4,threads=1 \
 - **`-cdrom systemrescue-12.01-amd64.iso`**  
     Подключает ISO-образ как CD-ROM:
     - `systemrescue-12.01-amd64.iso` — загрузочный диск для аварийного восстановления.
+- **`-enable-kvm`**
+	Включает аппаратное ускорение виртуализации через KVM (Kernel-based Virtual Machine).
 
 Открываю второй терминал, и согласно `-vnc :1,password-secret=vncpw` проверяю, что VNC-сервер слушает на порту 5901:
 
@@ -153,7 +156,7 @@ SystemRescue 12.01 загружена, вход в систему выполне
 
 ![img](attachments/1.15.png)
 
-/dev/sda - интерсующий меня проблемный диск
+/dev/sda - интересующий меня проблемный диск
 
 Проверяю таблицу разделов:
 
@@ -246,10 +249,219 @@ y - подтверждаю изменения
 
 `reboot -f`
 
-Вхожу в систему под пользователем kit:
+Система загружается до логина без помощи. Вхожу в систему под пользователем kit:
 
 ![img](attachments/1.33.png)
 
 Проверяю, что SecureBoot включен, а также то, что примонтированы все незакомментированные в исходной системе ФС:
 
 ![img](attachments/1.34.png)
+
+### Часть 2. Найти и получить секрет
+
+#### Мои попытки найти секрет:
+
+Выключаю ВМ.
+
+Расскомментирую строки в run.sh, содержащие `swtpm`, и иду изучать значения этих строк.
+
+```
+pgrep swtpm >/dev/null || swtpm socket --tpmstate dir=tpm/ --ctrl type=unixio,path=tpm/swtpm-sock --tpm2 -d
+```
+
+- **`pgrep swtpm >/dev/null`**  
+    Проверяет, запущен ли уже процесс `swtpm`. Если процесс найден - команда завершается успешно.
+    
+- **`||`**  
+    Логическое "ИЛИ". Выполняет следующую команду только если предыдущая завершилась с ошибкой (т.е. процесс `swtpm` не найден).
+    
+- **`swtpm socket ...`**  
+    Запускает эмулятор TPM в режиме сокета:
+    - `--tpmstate dir=tpm/`  
+        Хранить состояние TPM в директории `tpm/`
+    - `--ctrl type=unixio,path=tpm/swtpm-sock`  
+        Использовать UNIX-сокет для управления (`tpm/swtpm-sock`)
+    - `--tpm2`  
+        Режим эмуляции TPM 2.0 (вместо TPM 1.2)        
+    - `-d`  
+        Режим отладки (вывод логов в консоль)
+
+```
+-chardev socket,id=chrtpm,path=tpm/swtpm-sock -tpmdev emulator,id=tpm0,chardev=chrtpm -device tpm-tis,tpmdev=tpm0
+```
+
+- **`-chardev socket,id=chrtpm,path=tpm/swtpm-sock`**  
+    Создаёт виртуальное символьное устройство, подключённое к UNIX-сокету эмулятора TPM.
+
+- **`-tpmdev emulator,id=tpm0,chardev=chrtpm`**  
+    Настраивает TPM-устройство, использующее указанное символьное устройство (`chrtpm`).
+
+- **`-device tpm-tis,tpmdev=tpm0`**  
+    Подключает к виртуальной машине стандартный интерфейс TPM (TIS - Trusted Interface System), связанный с эмулятором `tpm0`.
+
+Запсукаю скрипт run.sh и обнаруживаю, что пакет swtpm не установлен в системе, устанавливаю и запускаю скрипт:
+
+![img](attachments/2.1.png)
+
+На ВМ проверяю состояние ssh-сервера, он выключен, поднимаю:
+
+![img](attachments/2.2.png)
+
+Подключаюсь с хоста на ВМ по SSH согласно правилу проброса портов при запуске qemu:
+
+![img](attachments/2.3.png)
+
+Поиск секрета веду от root:
+
+passwd root
+
+su -
+
+Проверяю наличие TPM устройств:
+
+ls /dev/tpm*
+
+Ищу по шаблону *secret*:
+
+find / -name *secret*
+
+Проверяю найденные и подходящие, на мой взгляд, файлы:
+
+cat /etc/lvm/backup/vg-secret:
+
+```
+...
+device = "/dev/mapper/dm_crypt-1"	# Hint only
+...
+```
+
+cat /etc/lvm/archive/vg-secret_00000-2051210907.vg:
+
+```
+...
+device = "/dev/dm-2"	# Hint only
+...
+```
+
+```
+root@kit2025:~# cat /etc/udev/rules.d/vg--secret-lv--secret.rules
+# Written by curtin
+SUBSYSTEM=="block", ACTION=="add|change", ENV{DM_NAME}=="vg--secret-lv--secret", SYMLINK+="disk/by-dname/vg--secret-lv--secret"
+```
+
+Проверяю директорию /secret:
+
+ls -la /secret
+
+Смотрю заголовок зашифрованного раздела /dev/sda3:
+
+```
+root@kit2025:~# cryptsetup luksDump /dev/sda3
+LUKS header information
+Version:       	2
+Epoch:         	9
+Metadata area: 	16384 [bytes]
+Keyslots area: 	16744448 [bytes]
+UUID:          	846b5496-b627-4602-8c4c-25cdf32dd9f6
+Label:         	(no label)
+Subsystem:     	(no subsystem)
+Flags:       	(no flags)
+
+Data segments:
+  0: crypt
+	offset: 16777216 [bytes]
+	length: (whole device)
+	cipher: aes-xts-plain64
+	sector: 512 [bytes]
+
+Keyslots:
+  0: luks2
+	Key:        512 bits
+	Priority:   normal
+	Cipher:     aes-xts-plain64
+	Cipher key: 512 bits
+	PBKDF:      argon2id
+	Time cost:  5
+	Memory:     1048576
+	Threads:    4
+	Salt:       18 8a 03 eb 3f 2d 4d d4 2c ea e3 6a 56 8e 6c 5c 
+	            08 bb 30 ce e6 17 8d c8 71 17 02 b9 a8 19 5f dc 
+	AF stripes: 4000
+	AF hash:    sha256
+	Area offset:32768 [bytes]
+	Area length:258048 [bytes]
+	Digest ID:  0
+  1: luks2
+	Key:        512 bits
+	Priority:   normal
+	Cipher:     aes-xts-plain64
+	Cipher key: 512 bits
+	PBKDF:      pbkdf2
+	Hash:       sha512
+	Iterations: 1000
+	Salt:       ee 3c 23 1f 20 62 1a d8 9b f1 e2 86 e1 0c 88 11 
+	            af 5b fa 33 87 4a a1 80 0d 52 dd 57 e0 9c f2 cd 
+	AF stripes: 4000
+	AF hash:    sha512
+	Area offset:290816 [bytes]
+	Area length:258048 [bytes]
+	Digest ID:  0
+Tokens:
+  0: systemd-tpm2
+	tpm2-hash-pcrs:   7+8
+	tpm2-pcr-bank:    sha256
+	tpm2-pubkey:
+	            (null)
+	tpm2-pubkey-pcrs: 
+	tpm2-primary-alg: ecc
+	tpm2-blob:        00 9e 00 20 e3 28 84 45 75 70 86 5b dc 80 0a f7
+	            92 dd b7 bf f9 79 af 51 07 4b b0 c1 e3 c0 52 65
+	            37 4c a4 b0 00 10 2a 47 75 d1 01 ff 67 0a 19 1b
+	            f1 94 bf 40 88 8f 1d c2 c5 f1 1d e4 4e 60 38 18
+	            1b d2 0f 6e 3c e8 a2 57 92 0b 94 7f bb e6 1e bf
+	            06 60 a9 59 be eb ef 0e 0d f4 90 27 9d 3d 08 b5
+	            15 c6 84 9c f6 51 f3 9c fb 5c 53 6e cb 33 a4 ca
+	            90 62 c2 50 04 26 e8 c0 ad 3d 9d 94 27 7a 0b 9a
+	            30 20 fc 11 9d eb 39 5a 6c f1 dc f4 58 99 c7 99
+	            6e 1f ac 62 eb c2 3e 15 8e 2e f6 9f 57 a8 41 ac
+	            00 4e 00 08 00 0b 00 00 00 12 00 20 cd 9b ad 6c
+	            2e 2e 6f 66 40 47 9f 8e 3d 28 0c a5 00 fb 40 b4
+	            67 15 4a a5 be 49 a0 aa dc c5 d6 ac 00 10 00 20
+	            3d 03 6e e3 47 e8 b7 49 e0 d1 1d 1c c8 16 ac cb
+	            48 3f a0 c6 3f 4c 16 b6 f4 b8 2d 4b c5 dc d6 76
+	tpm2-policy-hash:
+	            cd 9b ad 6c 2e 2e 6f 66 40 47 9f 8e 3d 28 0c a5
+	            00 fb 40 b4 67 15 4a a5 be 49 a0 aa dc c5 d6 ac
+	tpm2-pin:         false
+	tpm2-pcrlock:     false
+	tpm2-salt:        false
+	tpm2-srk:         true
+	Keyslot:    1
+Digests:
+  0: pbkdf2
+	Hash:       sha256
+	Iterations: 80215
+	Salt:       2b 9b cc 8b f8 d0 60 a1 ad 5d b9 52 9e ee 4d 61 
+	            0f 99 7a 1b 92 5e 2e 9e 75 3c c1 d1 9c 72 54 9f 
+	Digest:     ff 26 d7 c9 cb 2c b6 9c 21 91 86 87 9d cc e6 6f 
+	            96 74 af 52 24 44 90 7b aa d8 ba 7d 3f 75 84 1c
+```
+
+Для автоматической разблокировки раздела необходимо, чтобы регистры 7 (SecureBoot) и 8 (GRUB) PCR были точно такие же, что и при создании токена. Так как GRUB был переустановлен, а SecureBoot выключался, то регистры изменились. Алгоритм хеширования - sha256.
+
+Смотрю регистры sha256:7,8:
+
+```
+root@kit2025:~# tpm2_pcrread sha256:7,8
+sha256:
+    7 : 0xEE089A9AC17AFCECA6230224B9729151E314E2991C641A432ABA57656A31DF50
+    8 : 0x14FF183D55195E6052D85B7578B70EF0FFC60A1D5BBCF6544C5FAA5347E0FD77
+```
+
+Пытаюсь расшифровать раздел /dev/sda3 автоматически, нужна passphrase:
+
+![img](attachments/2.4.png)
+
+Пытаюсь выполнить привязку LUKS-раздела к TPM с использованием значений PCR, нужна passphrase:
+
+![img](attachments/2.5.png)
