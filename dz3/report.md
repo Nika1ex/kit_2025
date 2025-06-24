@@ -1,6 +1,6 @@
 ## Введение
 
-Настоящий документ является структурированным отчетом с подробным описанием выполняемых действий в процессе решения ДЗ по лекции "Внутренности linux". Выполнена Часть 1. 
+Настоящий документ является структурированным отчетом с подробным описанием выполняемых действий в процессе решения ДЗ по лекции "Внутренности linux". Выполнены Часть 1 и Часть 2. 
 
 ДЗ выполнено на ОС Ubuntu 24.04.2 LTS:
 
@@ -104,3 +104,74 @@ exit - выход из GDB
 ![img](attachments/1.5.png)
 
 Теперь можно закрыть ноут и бежать на лекцию.
+
+### Часть 2. Найти самую нагруженную функцию
+
+Клонирую репозиторий zstd с github:
+
+![img](attachments/2.1.png)
+
+Изучаю Makefile, чтобы понять как собирать проект.
+
+Собираю проект с дополнительным флагом:
+
+`make MOREFLAGS="-g"`
+
+-g - produce debugging information in the operating system's native format (stabs, COFF, XCOFF, or DWARF). GDB can work with this debugging information.
+
+Смотрю по выводу директорию, в которой находится собранный бинарь:
+
+![img](attachments/2.2.png)
+
+Перехожу в ./programs/ и нахожу собранный бинарь zstd:
+
+![img](attachments/2.3.png)
+
+Запускаю команду, указанную в задании:
+
+![img](attachments/2.4.png)
+
+Узнаю PID запущенного процесса и снимаю с него perf record:
+
+![img](attachments/2.5.png)
+
+Смотрю perf report:
+
+`perf report -i zstd_perf.data`
+
+![img](attachments/2.6.png)
+
+ZSTD_btGetAllMatches_noDict_3 - наиболее нагруженная функция в бинарном файле (84.07% времени CPU).
+
+Ищу эту функцию в исходном коде zstd и ничего не нахожу:
+
+![img](attachments/2.7.png)
+
+Запускаю собранный бинарь zstd в gdb, пытаюс узнать адресс ZSTD_btGetAllMatches_noDict_3 и информацию о строке исходного кода:
+
+![img](attachments/2.8.png)
+
+Искомый файл - zstd/lib/compress/zstd_opt.c, строка 876.
+
+Анализирую файл zstd/lib/compress/zstd_opt.с:
+
+На 876 строке находится макрос GEN_ZSTD_BT_GET_ALL_MATCHES(noDict), который, используя цепочку макросов, генерирует функцию ZSTD_btGetAllMatches_noDict_3, которая в свою очередь вызывает ZSTD_btGetAllMatches_internal(), которая вызывает ZSTD_insertBtAndGetAllMatches(), выполяющую поиск совпадений в процессе выполнения алгоритма сжатия.
+
+Алгоритм поиска совпадений ZSTD_insertBtAndGetAllMatches() вызывается для каждого блока данных при сжатии, работает с хеш-таблицами и бинарными деревьями (в зависимости от стратегии), что требует операций O(n) или O(log n) на каждом шаге.
+
+Функция имеет атрибуты FORCE_INLINE_TEMPLATE (принудительно пподставляется в место вызова и может специализироваться для разных типов данных или параметров) и ZSTD_ALLOW_POINTER_OVERFLOW_ATTR (нет проверок на переполнение).
+
+Таким образом самая нагруженная функция в исходниках zstd:
+
+```
+ZSTD_insertBtAndGetAllMatches (
+                ZSTD_match_t* matches,  /* store result (found matches) in this table (presumed large enough) */
+                ZSTD_MatchState_t* ms,
+                U32* nextToUpdate3,
+                const BYTE* const ip, const BYTE* const iLimit,
+                const ZSTD_dictMode_e dictMode,
+                const U32 rep[ZSTD_REP_NUM],
+                const U32 ll0,  /* tells if associated literal length is 0 or not. This value must be 0 or 1 */
+                const U32 lengthToBeat,
+                const U32 mls /* template */)
+```
