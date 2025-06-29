@@ -1,0 +1,39 @@
+name: hw1
+
+topology:
+  defaults:
+    kind: linux
+    image: lab:1
+    network-mode: none
+  nodes:
+    pc1:
+      exec:
+        - ip addr add 192.168.100.10/24 dev eth1
+        - ip route add default via 192.168.100.1
+    pc2:
+      exec:
+        - ip addr add 172.16.100.10/24 dev eth1
+        - ip route add default via 172.16.100.1
+    pc3:
+      exec:
+        - ip addr add 192.168.100.20/24 dev eth1
+        - ip route add default via 192.168.100.1
+    pc4:
+      exec:
+        - ip addr add 172.16.100.20/24 dev eth1
+        - ip route add default via 172.16.100.1
+    r:
+      exec:
+        - ip addr add 192.168.100.1/24 dev eth1
+        - ip addr add 172.16.100.1/24 dev eth2
+    br1:
+      kind: bridge
+    br2:
+      kind: bridge
+  links:
+    - endpoints: ["pc1:eth1", "br1:pc1"]
+    - endpoints: ["r:eth1", "br1:r192"]
+    - endpoints: ["pc3:eth1", "br1:pc3"]
+    - endpoints: ["pc2:eth1", "br2:pc2"]
+    - endpoints: ["r:eth2", "br2:r172"]
+    - endpoints: ["pc4:eth1", "br2:pc4"]

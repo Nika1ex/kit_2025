@@ -1,0 +1,20 @@
+127.0.0.1       localhost
+::1     localhost ip6-localhost ip6-loopback
+fe00::0 ip6-localnet
+ff00::0 ip6-mcastprefix
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters
+
+192.168.1.1 pc1
+192.168.13.0 pc1-eth1
+172.17.10.0 pc1-eth2
+10.12.12.8 pc2
+192.168.13.1 pc2-eth1
+10.200.13.0 pc2-eth2
+100.100.2.12 pc3
+172.17.18.0 pc3-eth1
+172.17.10.1 pc3-eth2
+192.168.13.10 pc4
+172.17.18.1 pc4-eth1
+10.200.13.1 pc4-eth2
+
